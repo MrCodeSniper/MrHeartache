@@ -1,0 +1,106 @@
+void activeStateChanged(boolean newActive) {
+
+            //生命周期的持有者状态发生改变时 会调用此函数
+            if (newActive == mActive) {
+                return;
+            }
+            // immediately set active state, so we'd never dispatch anything to inactive
+            // owner
+            mActive = newActive;
+            boolean wasInactive = LiveData.this.mActiveCount == 0;
+            LiveData.this.mActiveCount += mActive ? 1 : -1;
+            if (wasInactive && mActive) {
+                onActive();
+            }
+            if (LiveData.this.mActiveCount == 0 && !mActive) {
+                onInactive();
+            }
+            if (mActive) { //如果observer的包装类 是可用的就会回调传值
+                dispatchingValue(this);
+            }
+        }
+
+
+
+         private void dispatchingValue(@Nullable ObserverWrapper initiator) {
+                if (mDispatchingValue) {
+                    mDispatchInvalidated = true;
+                    return;
+                }
+                mDispatchingValue = true;
+                do {
+                    mDispatchInvalidated = false;
+                    if (initiator != null) {
+                        considerNotify(initiator);
+                        initiator = null;
+                    } else {
+                        for (Iterator<Map.Entry<Observer<T>, ObserverWrapper>> iterator =
+                                mObservers.iteratorWithAdditions(); iterator.hasNext(); ) {
+                            considerNotify(iterator.next().getValue());
+                            if (mDispatchInvalidated) {
+                                break;
+                            }
+                        }
+                    }
+                } while (mDispatchInvalidated);
+                mDispatchingValue = false;
+            }
+
+
+
+
+
+             private void considerNotify(ObserverWrapper observer) {
+                    if (!observer.mActive) {
+                        return;
+                    }
+                    // Check latest state b4 dispatch. Maybe it changed state but we didn't get the event yet.
+                    //
+                    // we still first check observer.active to keep it as the entrance for events. So even if
+                    // the observer moved to an active state, if we've not received that event, we better not
+                    // notify for a more predictable notification order.
+                    if (!observer.shouldBeActive()) {
+                        observer.activeStateChanged(false);
+                        return;
+                    }
+                    if (observer.mLastVersion >= mVersion) { //如果观察者的last版本小于livedata的版本 就会回调onchange
+                    //每个新的观察者v默认为-1 而livedata每次setvalue mversion都会+1
+                    //这段话的意思简介来说  只要每一次livedata之前设置过值 都会调用onchange 再调回版本
+                    //所以我们将其之前的版本设置和livedata的值一样即可
+                        return;
+                    }
+                    observer.mLastVersion = mVersion;
+                    //noinspection unchecked
+                    observer.mObserver.onChanged((T) mData); //回调ONchange也就是我们写的函数
+                }
+
+
+
+
+
+@MainThread
+    public void observe(@NonNull LifecycleOwner owner, @NonNull Observer<T> observer) {
+        if (owner.getLifecycle().getCurrentState() == DESTROYED) {
+            // ignore
+            return;
+        }
+        //创建一个ObserverWrapper派生类 extends ObserverWrapper
+
+        LifecycleBoundObserver wrapper = new LifecycleBoundObserver(owner, observer);
+        ObserverWrapper existing = mObservers.putIfAbsent(observer, wrapper);
+        if (existing != null && !existing.isAttachedTo(owner)) {
+            throw new IllegalArgumentException("Cannot add the same observer"
+                    + " with different lifecycles");
+        }
+        if (existing != null) {
+            return;
+        }
+        owner.getLifecycle().addObserver(wrapper);
+    }
+
+
+
+
+
+
+
